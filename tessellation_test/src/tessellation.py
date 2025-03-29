@@ -107,6 +107,6 @@ def compute_total_gradient(poly, all_polys, center=(0.5, 0.5)):
     grad_normalized = grad / norm
 
     return grad_normalized
-def update_polygon(poly, grad, learning_rate=0.0001):
+def update_polygon(poly, grad_normalised, learning_rate=0.0001):
     # Reduce learning rate significantly
-    return poly - learning_rate * grad
+    return poly - learning_rate * grad_normalised
