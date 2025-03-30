@@ -5,7 +5,7 @@ from mpl_toolkits.mplot3d import Axes3D
 import matplotlib.colors as mcolors
 from tessellation_test.src.tessellation import (
     generate_voronoi, optimize_tessellation, spherical_polygon_area, 
-    spherical_distance, get_region_centroids
+    spherical_distance, get_region_centroids, compute_total_gradient, update_vertices
 )
 
 def plot_spherical_voronoi(ax, regions, colormap='viridis'):
@@ -165,18 +165,18 @@ def main():
     progress_bar = st.progress(0)
     status_text = st.empty()
     
+    # Extract initial regions
+    initial_regions = []
+    for region in vor.regions:
+        if region:
+            initial_regions.append(vor.vertices[region])
+    
+    # Initialize regions
+    regions = initial_regions.copy()
+    
     # Optimize button
     if iterations > 0 and st.button("Optimize Tessellation"):
         status_text.text("Optimizing tessellation...")
-        
-        # Extract initial regions
-        initial_regions = []
-        for region in vor.regions:
-            if region:
-                initial_regions.append(vor.vertices[region])
-        
-        # Initialize regions
-        regions = initial_regions.copy()
         
         # Run optimization
         for i in range(iterations):
@@ -185,21 +185,14 @@ def main():
             updated_regions = []
             for vertices in regions:
                 # Compute gradient and update vertices
-                grad = calculate_gradient(vertices, regions)
+                grad = compute_total_gradient(vertices, regions)
                 updated_vertices = update_vertices(vertices, grad, learning_rate)
                 updated_regions.append(updated_vertices)
             
             regions = updated_regions
             status_text.text(f"Iteration {i+1}/{iterations}")
         
-        optimized_regions = regions
         status_text.text("Optimization complete!")
-    else:
-        # Extract regions for unoptimized visualization
-        optimized_regions = []
-        for region in vor.regions:
-            if region:
-                optimized_regions.append(vor.vertices[region])
     
     # Create 3D plot
     fig = plt.figure(figsize=(10, 10))
@@ -207,9 +200,9 @@ def main():
     
     # Plot spherical Voronoi with appropriate coloring
     if view_mode == "Area-based Coloring":
-        plot_spherical_voronoi(ax, optimized_regions, colormap)
+        plot_spherical_voronoi(ax, regions, colormap)
     else:
-        plot_spherical_regions_with_gradients(ax, optimized_regions, colormap)
+        plot_spherical_regions_with_gradients(ax, regions, colormap)
     
     # Set the initial view angle
     ax.view_init(elev=30, azim=45)
@@ -221,7 +214,7 @@ def main():
     st.subheader("Tessellation Metrics")
     
     # Calculate areas
-    areas = [spherical_polygon_area(region) for region in optimized_regions]
+    areas = [spherical_polygon_area(region) for region in regions]
     avg_area = np.mean(areas)
     min_area = np.min(areas)
     max_area = np.max(areas)
