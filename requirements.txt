@@ -1,8 +1,8 @@
-numpy>=1.20.0
-scipy>=1.7.0
-matplotlib>=3.4.0
-networkx>=2.6.0
-pydot>=1.4.2
-shapely>=1.8.0
-streamlit>=1.10.0
-pytest>=6.2.5
+numpy
+streamlit
+scipy
+matplotlib
+networkx
+pydot
+shapely
+pytest
