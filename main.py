@@ -1,146 +1,244 @@
 """
-Main entry point for the tessellation algorithm demonstration.
+Main entry point for the spherical tessellation algorithm demonstration.
 """
 
 import numpy as np
 import matplotlib.pyplot as plt
 from mpl_toolkits.mplot3d import Axes3D
-from tessellation_test.src import tessellation
+import matplotlib.colors as mcolors
+from tessellation_test.src.tessellation import (
+    generate_voronoi, optimize_tessellation, spherical_polygon_area,
+    get_region_centroids, spherical_distance
+)
 
 
-def plot_2d_tessellation(polygons):
-    """Plot a 2D projection of the tessellation."""
-    fig, ax = plt.subplots(figsize=(10, 10))
-    ax.set_aspect('equal')
+def plot_3d_tessellation(regions, filename="tessellation_3d.png", colormap='viridis'):
+    """
+    Plot the spherical Voronoi tessellation in 3D.
     
-    for polygon in polygons:
-        ax.fill(*zip(*polygon), alpha=0.5, edgecolor='black')
-    
-    ax.set_xlim(0, 1)
-    ax.set_ylim(0, 1)
-    ax.set_title("2D Projection of Tessellation")
-    plt.savefig("tessellation_2d.png")
-    plt.close()
-
-def plot_3d_tessellation(points, zoom_factor=0.5):
-    """Plot the tessellation on a 3D sphere."""
-    fig = plt.figure(figsize=(10, 10))
+    Parameters:
+        regions: List of region vertices
+        filename: Output filename for the image
+        colormap: Matplotlib colormap name
+    """
+    fig = plt.figure(figsize=(12, 12))
     ax = fig.add_subplot(111, projection='3d')
     
-    # Convert 2D points to 3D points on sphere
-    sphere_points = tessellation.points_to_sphere(points, zoom_factor=zoom_factor)
+    # Create colormap
+    cmap = plt.get_cmap(colormap)
     
-    # Plot the sphere
-    u, v = np.mgrid[0:2*np.pi:20j, 0:np.pi:10j]
+    # Calculate areas for color mapping
+    areas = [spherical_polygon_area(region) for region in regions]
+    area_min, area_max = min(areas), max(areas)
+    
+    # Normalize areas for color mapping
+    norm = mcolors.Normalize(vmin=area_min, vmax=area_max)
+    
+    # Plot the unit sphere wireframe
+    u, v = np.mgrid[0:2*np.pi:30j, 0:np.pi:20j]
     x = np.cos(u) * np.sin(v)
     y = np.sin(u) * np.sin(v)
     z = np.cos(v)
-    ax.plot_wireframe(x, y, z, color="gray", alpha=0.2)
+    ax.plot_wireframe(x, y, z, color="gray", alpha=0.1)
     
-    # Plot the points
-    ax.scatter(sphere_points[:, 0], sphere_points[:, 1], sphere_points[:, 2], 
-               c='r', s=50)
+    # Plot each region
+    for i, region in enumerate(regions):
+        # Compute region face color based on its area
+        area = areas[i]
+        color = cmap(norm(area))
+        
+        # Create triangles from the region vertices
+        n = len(region)
+        triangles = []
+        centroid = np.mean(region, axis=0)
+        centroid = centroid / np.linalg.norm(centroid)  # Project to sphere
+        
+        for j in range(n):
+            triangles.append([centroid, region[j], region[(j+1) % n]])
+        
+        # Plot each triangle
+        for tri in triangles:
+            tri_array = np.array(tri)
+            ax.plot_trisurf(tri_array[:, 0], tri_array[:, 1], tri_array[:, 2], 
+                           color=color, alpha=0.7, shade=True)
+        
+        # Plot the region edges
+        for j in range(n):
+            edge = np.array([region[j], region[(j+1) % n]])
+            ax.plot(edge[:, 0], edge[:, 1], edge[:, 2], 'k-', lw=0.5, alpha=0.5)
     
-    # Set equal aspect ratio
-    ax.set_box_aspect([1,1,1])
-    ax.set_title("3D Spherical Tessellation")
+    # Add colorbar
+    sm = plt.cm.ScalarMappable(cmap=cmap, norm=norm)
+    sm.set_array([])
+    plt.colorbar(sm, ax=ax, label='Region Area')
     
-    # Rotate view to show central part of sphere
+    # Set equal aspect ratio and labels
+    ax.set_box_aspect([1, 1, 1])
+    ax.set_title('Spherical Voronoi Tessellation')
+    ax.set_xlabel('X')
+    ax.set_ylabel('Y')
+    ax.set_zlabel('Z')
+    
+    # Set the initial view angle
     ax.view_init(elev=30, azim=45)
     
-    plt.savefig("tessellation_3d.png")
+    # Save the plot
+    plt.savefig(filename, dpi=300, bbox_inches='tight')
     plt.close()
 
-def main():
-    print("Tessellation Test - Spherical Approach")
-    print("--------------------------------------")
-    
-    # Define a simple polygon (triangle) for demonstration.
-    polygon = np.array([
-        [0.0, 0.0],
-        [1.0, 0.0],
-        [0.5, 1.0]
-    ])
 
-    # Choose a vertex to update (e.g., the first vertex)
-    vertex = polygon[0]
-    print("Initial vertex:", vertex)
-
-    # Compute the energy gradient for the vertex.
-    gradient = tessellation.compute_energy_gradient(vertex, polygon)
-    print("Computed gradient:", gradient)
-
-    # Update the vertex position using the computed gradient.
-    updated_vertex = tessellation.update_vertex(vertex, gradient)
-    print("Updated vertex:", updated_vertex)
-
-    # Demonstrate full tessellation optimization
-    print("\nDemonstrating full tessellation optimization:")
-    # Generate random points
-    np.random.seed(42)
-    num_points = 20
-    points = np.random.rand(num_points, 2)
+def plot_3d_gradient_visualization(regions, filename="tessellation_gradient.png", colormap='Paired'):
+    """
+    Plot the spherical tessellation with colors based on distance from a reference point.
     
-    # Generate initial Voronoi tessellation
-    vor = tessellation.generate_voronoi(points)
-    polygons = tessellation.voronoi_polygons(vor)
+    Parameters:
+        regions: List of region vertices
+        filename: Output filename for the image
+        colormap: Matplotlib colormap name
+    """
+    fig = plt.figure(figsize=(12, 12))
+    ax = fig.add_subplot(111, projection='3d')
     
-    print(f"Initial tessellation with {len(polygons)} polygons")
+    # Reference point (north pole)
+    ref_point = np.array([0, 0, 1.0])
     
-    # Run a few optimization iterations
-    iterations = 10
-    for i in range(iterations):
-        updated_polygons = []
-        for poly in polygons:
-            grad = tessellation.compute_total_gradient(poly, polygons)
-            updated_poly = tessellation.update_polygon(poly, grad)
-            updated_poly = np.clip(updated_poly, 0, 1)
-            updated_polygons.append(updated_poly)
-        polygons = updated_polygons
+    # Get centroids
+    centroids = [np.mean(region, axis=0) / np.linalg.norm(np.mean(region, axis=0)) for region in regions]
+    
+    # Calculate distances from reference point
+    distances = [spherical_distance(centroid, ref_point) for centroid in centroids]
+    min_dist, max_dist = min(distances), max(distances)
+    
+    # Create colormap
+    cmap = plt.get_cmap(colormap)
+    norm = mcolors.Normalize(vmin=min_dist, vmax=max_dist)
+    
+    # Plot the unit sphere wireframe
+    u, v = np.mgrid[0:2*np.pi:30j, 0:np.pi:20j]
+    x = np.cos(u) * np.sin(v)
+    y = np.sin(u) * np.sin(v)
+    z = np.cos(v)
+    ax.plot_wireframe(x, y, z, color="gray", alpha=0.1)
+    
+    # Plot each region with color based on distance
+    for i, region in enumerate(regions):
+        distance = distances[i]
+        color = cmap(norm(distance))
         
-        # Print progress
-        if (i+1) % 5 == 0:
-            print(f"Completed {i+1} iterations")
+        # Create triangles from the region vertices
+        n = len(region)
+        triangles = []
+        centroid = centroids[i]
+        
+        for j in range(n):
+            triangles.append([centroid, region[j], region[(j+1) % n]])
+        
+        # Plot each triangle
+        for tri in triangles:
+            tri_array = np.array(tri)
+            ax.plot_trisurf(tri_array[:, 0], tri_array[:, 1], tri_array[:, 2], 
+                           color=color, alpha=0.7, shade=True)
+        
+        # Plot the region edges
+        for j in range(n):
+            edge = np.array([region[j], region[(j+1) % n]])
+            ax.plot(edge[:, 0], edge[:, 1], edge[:, 2], 'k-', lw=0.5, alpha=0.5)
     
-    print("Optimization complete")
+    # Add colorbar
+    sm = plt.cm.ScalarMappable(cmap=cmap, norm=norm)
+    sm.set_array([])
+    plt.colorbar(sm, ax=ax, label='Angular Distance from North Pole')
     
-    # Calculate and print some metrics
-    areas = [tessellation.polygon_area(poly) for poly in polygons]
+    # Set equal aspect ratio and labels
+    ax.set_box_aspect([1, 1, 1])
+    ax.set_title('Spherical Voronoi Tessellation with Distance Gradient')
+    ax.set_xlabel('X')
+    ax.set_ylabel('Y')
+    ax.set_zlabel('Z')
+    
+    # Set the initial view angle
+    ax.view_init(elev=30, azim=45)
+    
+    # Save the plot
+    plt.savefig(filename, dpi=300, bbox_inches='tight')
+    plt.close()
+
+
+def main():
+    print("Spherical Tessellation - Direct 3D Approach")
+    print("-------------------------------------------")
+    
+    # Generate initial tessellation
+    print("Generating spherical Voronoi tessellation...")
+    num_points = 30
+    random_seed = 42
+    
+    vor = generate_voronoi(num_points=num_points, random_seed=random_seed)
+    
+    # Extract regions
+    initial_regions = []
+    for region in vor.regions:
+        if region:
+            initial_regions.append(vor.vertices[region])
+    
+    print(f"Generated tessellation with {len(initial_regions)} regions")
+    
+    # Plot initial tessellation
+    print("Creating initial visualization...")
+    plot_3d_tessellation(initial_regions, "initial_tessellation.png")
+    print("Initial tessellation saved as 'initial_tessellation.png'")
+    
+    # Optimize tessellation
+    print("\nOptimizing tessellation...")
+    iterations = 50
+    learning_rate = 0.001
+    
+    optimized_regions = optimize_tessellation(vor, iterations=iterations, learning_rate=learning_rate)
+    print(f"Completed {iterations} optimization iterations")
+    
+    # Plot optimized tessellation
+    print("Creating optimized visualization...")
+    plot_3d_tessellation(optimized_regions, "optimized_tessellation.png")
+    print("Optimized tessellation saved as 'optimized_tessellation.png'")
+    
+    # Plot gradient visualization
+    print("Creating gradient visualization...")
+    plot_3d_gradient_visualization(optimized_regions)
+    print("Gradient visualization saved as 'tessellation_gradient.png'")
+    
+    # Calculate and print metrics
+    print("\nTessellation Metrics:")
+    areas = [spherical_polygon_area(region) for region in optimized_regions]
     avg_area = np.mean(areas)
     min_area = np.min(areas)
     max_area = np.max(areas)
     
-    print(f"Average tile area: {avg_area:.6f}")
-    print(f"Min tile area: {min_area:.6f}")
-    print(f"Max tile area: {max_area:.6f}")
+    print(f"Average region area: {avg_area:.6f}")
+    print(f"Minimum region area: {min_area:.6f}")
+    print(f"Maximum region area: {max_area:.6f}")
     print(f"Area ratio (max/min): {max_area/min_area if min_area > 0 else 'N/A'}")
     
-    # Check if tiles are interlocking
-    interlock_count = 0
-    for i, poly1 in enumerate(polygons):
-        for j, poly2 in enumerate(polygons):
-            if i != j:
-                try:
-                    from shapely.geometry import Polygon
-                    p1 = Polygon(poly1)
-                    p2 = Polygon(poly2)
-                    if p1.touches(p2) or p1.distance(p2) < 1e-6:
-                        interlock_count += 1
-                        break
-                except:
-                    pass
+    # Check region connectivity
+    print("\nChecking region connectivity...")
+    connected_count = 0
+    for i, region1 in enumerate(optimized_regions):
+        for j, region2 in enumerate(optimized_regions):
+            if i >= j:  # Skip self and already checked pairs
+                continue
+                
+            # Calculate minimum distance between regions
+            min_distance = float('inf')
+            for v1 in region1:
+                for v2 in region2:
+                    dist = np.linalg.norm(v1 - v2)
+                    min_distance = min(min_distance, dist)
+            
+            # If regions are very close, consider them connected
+            if min_distance < 0.01:
+                connected_count += 1
     
-    print(f"Number of interlocking tiles: {interlock_count} out of {len(polygons)}")
-    
-    # Plot the results
-    print("\nGenerating visualizations...")
-    plot_2d_tessellation(polygons)
-    
-    # Convert polygons to points for 3D visualization
-    points_array = np.array([np.mean(poly, axis=0) for poly in polygons])
-    plot_3d_tessellation(points_array)
-    
-    print("Visualizations saved as tessellation_2d.png and tessellation_3d.png")
+    print(f"Number of connected region pairs: {connected_count}")
+    print(f"Connectivity ratio: {connected_count / (len(optimized_regions) * (len(optimized_regions) - 1) / 2):.2f}")
     
     print("\nRun 'streamlit run tessellation_test/streamlit_app/app.py' for interactive visualization.")
 
