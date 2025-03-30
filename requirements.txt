@@ -6,3 +6,4 @@ networkx
 pydot
 shapely
 pytest
+shapely

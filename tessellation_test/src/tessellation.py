@@ -384,9 +384,10 @@ def compute_total_gradient(vertices, all_vertices_lists, sphere_center=(0, 0, 0)
         grad[i] = grad[i] - np.dot(grad[i], vertex) * vertex
         
     # Normalize gradient to prevent extreme moves
-    grad_norms = np.linalg.norm(grad, axis=1, keepdims=True)
-    mask = grad_norms > 0
-    grad[mask] = grad[mask] / grad_norms[mask]
+    for i in range(len(grad)):
+        grad_norm = np.linalg.norm(grad[i])
+        if grad_norm > 0:
+            grad[i] = grad[i] / grad_norm
     
     return grad
 
