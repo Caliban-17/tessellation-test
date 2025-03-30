@@ -7,9 +7,20 @@
 - 📊 Radial area gradients (larger central tiles)
 - 🔀 Maximized irregularity in tile sizes
 - 🧩 Interlocking tiles without gaps or overlaps
-- 🔁 Periodic boundary conditions for seamless continuity
+- 🔍 Zoomed-in spherical topology for seamless continuity
 
 The engine uses a mathematically grounded energy function based on multivariate calculus and gradient descent to achieve aesthetic and structural balance.
+
+## 🆕 Zoomed-in Spherical Approach
+
+The latest version implements a **zoomed-in spherical tessellation** to naturally achieve the boundaryless property:
+
+- 🌐 Points are projected onto a unit sphere
+- 🔍 Only a portion of the sphere is used (zoomed-in view)
+- 🔄 Voronoi tessellation is computed on this portion
+- 📈 Results are projected back to 2D using an equal-area projection
+
+This approach eliminates the need to handle complex boundary conditions since we're not using the entire sphere surface - we're only working with a small patch of it, far from any boundary.
 
 ---
 
@@ -41,7 +52,18 @@ Each λ-term corresponds to a geometrically or topologically meaningful constrai
 - ✅ Stable polygonal boundaries
 - ✅ Gradient-constrained vertex movements
 - ✅ Modular penalty functions (angle, size, boundary, etc.)
-- ✅ Fully tested (12 pytest assertions)
+- ✅ Fully tested (12 passing tests)
+- ✅ Zoomed-in spherical topology for true boundaryless tiling
+
+---
+
+## 📊 Visualization
+
+The project includes both 2D and 3D visualizations:
+
+- 2D projection showing the tessellation in a planar representation
+- 3D visualization showing the points on a sphere
+- Interactive Streamlit app with zoom factor control
 
 ---
 
@@ -51,5 +73,35 @@ Each λ-term corresponds to a geometrically or topologically meaningful constrai
 git clone https://github.com/Caliban-17/tessellation-test.git
 cd tessellation-test
 python -m venv venv
-source venv/bin/activate
+source venv/bin/activate  # On Windows: venv\Scripts\activate
 pip install -r requirements.txt
+```
+
+## 📚 Usage
+
+To run the main demonstration:
+
+```bash
+python main.py
+```
+
+To run the interactive Streamlit app:
+
+```bash
+streamlit run tessellation_test/streamlit_app/app.py
+```
+
+To run the tests:
+
+```bash
+python -m pytest tessellation_test/tests/ -v
+```
+
+## 🔍 Zooming Explained
+
+The zoom factor (default 0.5) controls how much of the sphere is used:
+- Lower values (e.g., 0.2) focus on a very small patch, completely avoiding boundary effects
+- Higher values (e.g., 0.8) use more of the sphere but may introduce more distortion
+- The optimal setting balances coverage area with natural tessellation properties
+
+For best results, keep the zoom factor between 0.3 and 0.7.
