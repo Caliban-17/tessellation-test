@@ -1,6 +1,7 @@
-"""
-Main entry point for 2D Toroidal Tessellation demonstration.
-"""
+# -*- coding: utf-8 -*-
+# WARNING: This file now runs the 2D TOROIDAL demonstration,
+# despite the original 'main.py' name. Rename to main_2d.py if preferred.
+
 import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib.colors as mcolors
@@ -8,8 +9,15 @@ from matplotlib.patches import Polygon as MplPolygon
 from matplotlib.collections import PatchCollection
 
 # Assumes script is run from project root
-from tessellation_test.src.tessellation import generate_voronoi_regions_toroidal, optimize_tessellation_2d
-from utils.geometry import polygon_area, toroidal_distance
+try:
+    # Use absolute import based on editable install / PYTHONPATH
+    from tessellation_test.src.tessellation import generate_voronoi_regions_toroidal, optimize_tessellation_2d
+    from utils.geometry import polygon_area, toroidal_distance # Assumes utils is at root
+except ImportError as e:
+    print(f"ImportError: {e}")
+    print("Ensure the package is installed correctly (`pip install -e .`) or PYTHONPATH includes the project root.")
+    exit()
+
 
 # --- Domain Parameters ---
 WIDTH = 10.0
@@ -19,16 +27,7 @@ CENTER = np.array([WIDTH / 2, HEIGHT / 2])
 def plot_2d_tessellation(regions_data, points, width, height, filename="tessellation_2d.png", colormap='viridis', title_suffix="", show_points=True, show_tiling=True):
     """
     Plot the 2D toroidal Voronoi tessellation.
-
-    Args:
-        regions_data (list): Output from generate_voronoi_regions_toroidal.
-        points (np.ndarray): The generator points (N, 2).
-        width, height (float): Domain dimensions.
-        filename (str): Output filename.
-        colormap (str): Matplotlib colormap name.
-        title_suffix (str): Suffix for plot title.
-        show_points (bool): Whether to plot generator points.
-        show_tiling (bool): Whether to show adjacent tiles to visualize wrapping.
+    (Implementation unchanged)
     """
     if not regions_data:
         print("Warning: No regions data to plot.")
@@ -43,7 +42,6 @@ def plot_2d_tessellation(regions_data, points, width, height, filename="tessella
         print(f"Warning: Invalid colormap '{colormap}', using 'viridis'.")
         cmap = plt.get_cmap('viridis')
 
-
     patches = []
     colors = []
     areas = []
@@ -55,79 +53,46 @@ def plot_2d_tessellation(regions_data, points, width, height, filename="tessella
              for piece_verts in region_pieces:
                   polygon = MplPolygon(piece_verts, closed=True)
                   patches.append(polygon)
-                  # Store area corresponding to this patch for coloring
-                  # All pieces of a region get same color based on total area
                   colors.append(current_total_area)
-
 
     if not patches:
          print("Warning: No valid patches created for plotting.")
          plt.close(fig)
          return
 
-    # Normalize colors based on area
-    norm = mcolors.Normalize(vmin=min(areas) if areas else 0, vmax=max(areas) if areas else 1)
-    patch_colors = cmap(norm(colors)) # Map normalized areas to colors
+    vmin = min(areas) if areas else 0
+    vmax = max(areas) if areas else 1
+    if abs(vmin-vmax) < 1e-9: norm = mcolors.Normalize(vmin=vmin-0.1 if vmin==0 else vmin*0.9, vmax=vmax+0.1 if vmax==0 else vmax*1.1)
+    else: norm = mcolors.Normalize(vmin=vmin, vmax=vmax)
+    patch_colors = cmap(norm(colors))
 
     collection = PatchCollection(patches, facecolors=patch_colors, edgecolors='black', lw=0.5, alpha=0.8)
     ax.add_collection(collection)
 
-    # --- Optional: Show Tiling ---
     if show_tiling:
-        # Add collections for neighboring tiles to show wrapping
+        for dx_factor in [-1, 1]: offset = np.array([dx_factor * width, 0]); shifted_patches = [MplPolygon(p.get_xy() + offset, closed=True) for p in patches]; shifted_collection = PatchCollection(shifted_patches, facecolors=patch_colors, edgecolors='gray', lw=0.3, alpha=0.4); ax.add_collection(shifted_collection)
+        for dy_factor in [-1, 1]: offset = np.array([0, dy_factor * height]); shifted_patches = [MplPolygon(p.get_xy() + offset, closed=True) for p in patches]; shifted_collection = PatchCollection(shifted_patches, facecolors=patch_colors, edgecolors='gray', lw=0.3, alpha=0.4); ax.add_collection(shifted_collection)
         for dx_factor in [-1, 1]:
-            offset = np.array([dx_factor * width, 0])
-            shifted_patches = [MplPolygon(p.get_xy() + offset, closed=True) for p in patches]
-            shifted_collection = PatchCollection(shifted_patches, facecolors=patch_colors, edgecolors='gray', lw=0.3, alpha=0.4)
-            ax.add_collection(shifted_collection)
-        for dy_factor in [-1, 1]:
-            offset = np.array([0, dy_factor * height])
-            shifted_patches = [MplPolygon(p.get_xy() + offset, closed=True) for p in patches]
-            shifted_collection = PatchCollection(shifted_patches, facecolors=patch_colors, edgecolors='gray', lw=0.3, alpha=0.4)
-            ax.add_collection(shifted_collection)
-        # Corner tiles
-        for dx_factor in [-1, 1]:
-             for dy_factor in [-1, 1]:
-                 offset = np.array([dx_factor * width, dy_factor * height])
-                 shifted_patches = [MplPolygon(p.get_xy() + offset, closed=True) for p in patches]
-                 shifted_collection = PatchCollection(shifted_patches, facecolors=patch_colors, edgecolors='gray', lw=0.3, alpha=0.2)
-                 ax.add_collection(shifted_collection)
+             for dy_factor in [-1, 1]: offset = np.array([dx_factor * width, dy_factor * height]); shifted_patches = [MplPolygon(p.get_xy() + offset, closed=True) for p in patches]; shifted_collection = PatchCollection(shifted_patches, facecolors=patch_colors, edgecolors='gray', lw=0.3, alpha=0.2); ax.add_collection(shifted_collection)
 
-    # Plot generator points if requested
     if show_points and points is not None:
          ax.scatter(points[:, 0], points[:, 1], c='red', s=10, zorder=5, label='Generators')
-         if show_tiling: # Also plot ghost points
-             ghost_x, ghost_y = [], []
-             for dx_factor in [-1, 1]: ghost_x.extend(points[:, 0] + dx_factor * width)
-             for dy_factor in [-1, 1]: ghost_y.extend(points[:, 1] + dy_factor * height)
+         if show_tiling:
              for dx_factor in [-1, 0, 1]:
                  for dy_factor in [-1, 0, 1]:
                      if dx_factor == 0 and dy_factor == 0: continue
                      ax.scatter(points[:, 0] + dx_factor*width, points[:, 1] + dy_factor*height, c='red', s=5, alpha=0.3, zorder=4)
 
-
-    # Set plot limits
-    plot_margin_factor = 1.1 if not show_tiling else 1.5 # Larger margin if showing tiling
+    plot_margin_factor = 1.1 if not show_tiling else 1.5
     ax.set_xlim(-width * (plot_margin_factor-1) , width * plot_margin_factor)
     ax.set_ylim(-height* (plot_margin_factor-1) , height* plot_margin_factor)
-    if not show_tiling:
-         ax.set_xlim(0, width)
-         ax.set_ylim(0, height)
-
-
-    # Draw main boundary rectangle
+    if not show_tiling: ax.set_xlim(0, width); ax.set_ylim(0, height)
     ax.add_patch(MplPolygon([[0,0], [width,0], [width,height], [0,height]], closed=True, fill=False, edgecolor='blue', lw=1.5, linestyle='--'))
+    ax.set_title(f'2D Toroidal Voronoi Tessellation {title_suffix}'.strip()); ax.set_xlabel('X'); ax.set_ylabel('Y')
+    sm = plt.cm.ScalarMappable(cmap=cmap, norm=norm); sm.set_array(areas); plt.colorbar(sm, ax=ax, label='Region Area', shrink=0.6)
 
-    ax.set_title(f'2D Toroidal Voronoi Tessellation {title_suffix}'.strip())
-    ax.set_xlabel('X')
-    ax.set_ylabel('Y')
-    # Add colorbar
-    sm = plt.cm.ScalarMappable(cmap=cmap, norm=norm)
-    sm.set_array(areas)
-    plt.colorbar(sm, ax=ax, label='Region Area', shrink=0.6)
-
-    plt.savefig(filename, dpi=150, bbox_inches='tight')
-    print(f"Saved plot to {filename}")
+    try: plt.savefig(filename, dpi=150, bbox_inches='tight'); print(f"Saved plot to {filename}")
+    except Exception as e: print(f"Error saving plot {filename}: {e}")
     plt.close(fig)
 
 
@@ -136,21 +101,26 @@ def main():
     print("--------------------------------------")
 
     # Parameters
-    num_points = 35
+    num_points = 50
     random_seed = 42
-    iterations = 60
-    learning_rate = 0.8 # May need tuning for 2D
-    lambda_area = 1.0
-    lambda_centroid = 0.2
-    lambda_angle = 0.005 # Angle penalties might be less critical in 2D
+    iterations = 80
+    learning_rate = 0.02 # Stable rate found previously
+    lambda_area = 2.5   # Keep slightly higher lambda for area effect
+    lambda_centroid = 0.0 # Keep low centroid penalty
+    lambda_angle = 0.01
 
-    # Target area function: e.g., larger near center
+    # Target area function
     target_total_area = WIDTH * HEIGHT
-    base_area = target_total_area / num_points
-    max_dist = np.sqrt((WIDTH/2)**2 + (HEIGHT/2)**2) # Max distance from center
-    # Make larger away from center
-    target_area_func = lambda p: base_area * (1 + 0.8 * (toroidal_distance(p, CENTER, WIDTH, HEIGHT) / max_dist))
+    base_area = target_total_area / num_points if num_points > 0 else target_total_area
+    max_dist = np.sqrt((WIDTH/2)**2 + (HEIGHT/2)**2)
+    factor = 1.2 # Controls strength of gradient
 
+    # --- MODIFIED Line Below ---
+    # Target function: Larger TOWARDS the center
+    target_area_func = lambda p: base_area * (1 + factor * (1 - (toroidal_distance(p, CENTER, WIDTH, HEIGHT) / max_dist if max_dist > 0 else 0)))
+    # --- End Modification ---
+
+    print("Target Area Function: Larger towards center") # Add print statement
 
     # Generate initial points
     print(f"Generating {num_points} initial points (Seed={random_seed})...")
@@ -162,14 +132,15 @@ def main():
     # Initial Tessellation
     print("Generating initial tessellation...")
     initial_regions = generate_voronoi_regions_toroidal(points, WIDTH, HEIGHT)
-    if initial_regions:
+    if initial_regions and any(p for p in initial_regions if p):
         plot_2d_tessellation(initial_regions, points, WIDTH, HEIGHT, "initial_tessellation_2d.png", title_suffix="(Initial)")
     else:
         print("Failed to generate initial tessellation.")
-        return # Stop if initial failed
+        return
 
     # Optimize Tessellation
     print(f"\nOptimizing tessellation ({iterations} iterations, lr={learning_rate})...")
+    # Pass parameters including the modified target_area_func
     optimized_regions, final_points, history = optimize_tessellation_2d(
         points, WIDTH, HEIGHT,
         iterations=iterations, learning_rate=learning_rate,
@@ -178,9 +149,9 @@ def main():
     )
 
     # Plot Optimized
-    if optimized_regions:
+    if optimized_regions and any(p for p in optimized_regions if p):
         print("Plotting optimized tessellation...")
-        plot_2d_tessellation(optimized_regions, final_points, WIDTH, HEIGHT, "optimized_tessellation_2d.png", title_suffix="(Optimized)")
+        plot_2d_tessellation(optimized_regions, final_points, WIDTH, HEIGHT, "optimized_tessellation_2d.png", title_suffix="(Optimized - Larger Center)")
     else:
         print("Optimization failed to produce valid regions.")
 
@@ -199,6 +170,8 @@ def main():
              print(f"Area ratio (max/min): {max_a/min_a if min_a > 1e-9 else 'N/A'}")
         else:
              print("No valid regions to calculate metrics.")
+
+    print("\nRun Streamlit app: streamlit run tessellation_test/streamlit_app/app.py")
 
 
 if __name__ == "__main__":
