@@ -1,5 +1,14 @@
 import numpy as np
-from shapely.geometry import Polygon, Point, MultiPolygon, GeometryCollection, LineString, box
+# Ensure shapely is imported correctly
+try:
+    from shapely.geometry import Polygon, Point, MultiPolygon, GeometryCollection, LineString, box
+    from shapely.errors import GEOSException
+    SHAPELY_AVAILABLE = True
+except ImportError:
+    print("ERROR: Shapely library not found. Please install it (`pip install shapely`)")
+    SHAPELY_AVAILABLE = False
+    # Optionally raise the error or exit if shapely is critical
+    # raise
 
 def toroidal_distance_sq(p1, p2, width, height):
     """
@@ -15,6 +24,10 @@ def toroidal_distance_sq(p1, p2, width, height):
     Returns:
         float: Squared toroidal distance.
     """
+    # Ensure inputs are numpy arrays
+    p1 = np.asarray(p1)
+    p2 = np.asarray(p2)
+
     dx = p1[0] - p2[0]
     dy = p1[1] - p2[1]
 
@@ -39,7 +52,8 @@ def polygon_area(vertices):
     Returns:
         float: Area of the polygon (always positive).
     """
-    if len(vertices) < 3:
+    vertices = np.asarray(vertices) # Ensure numpy array
+    if vertices.ndim != 2 or vertices.shape[1] != 2 or vertices.shape[0] < 3:
         return 0.0
     x = vertices[:, 0]
     y = vertices[:, 1]
@@ -55,53 +69,35 @@ def polygon_centroid(vertices):
         vertices (np.ndarray): Array of shape (N, 2) representing N ordered vertices.
 
     Returns:
-        np.ndarray: Centroid coordinates (x, y), or None if area is zero.
+        np.ndarray: Centroid coordinates (x, y), or None if area is zero or invalid input.
     """
-    if len(vertices) < 3:
-        return None
-    area_val = polygon_area(vertices)
-    if abs(area_val) < 1e-12: # Avoid division by zero for degenerate polygons
-        # Return geometric mean for degenerate cases? Or center of bbox?
-        return np.mean(vertices, axis=0) # Simple mean as fallback
+    vertices = np.asarray(vertices) # Ensure numpy array
+    if vertices.ndim != 2 or vertices.shape[1] != 2 or vertices.shape[0] < 3:
+        return None # Invalid input
 
-    x = vertices[:, 0]
-    y = vertices[:, 1]
-    # Shifted coordinates for formula stability with large coordinates? Not strictly needed here.
-    x_shifted = x #- np.mean(x)
-    y_shifted = y #- np.mean(y)
-
-    # Apply centroid formula components
-    a = np.dot(x_shifted, np.roll(y_shifted, 1)) - np.dot(y_shifted, np.roll(x_shifted, 1))
-    cx_term = (x_shifted + np.roll(x_shifted, 1)) * a
-    cy_term = (y_shifted + np.roll(y_shifted, 1)) * a
-
-    centroid_x = np.sum(cx_term) / (6.0 * area_val)
-    centroid_y = np.sum(cy_term) / (6.0 * area_val)
-
-    # Add back mean if subtracted earlier
-    # centroid_x += np.mean(x)
-    # centroid_y += np.mean(y)
-
-    # Handle potential sign issue from Shoelace area calculation / vertex order
-    # Recalculate area with consistent order if needed, but centroid formula handles it.
-    # Let's recheck the standard formula:
     signed_area = 0.0
     Cx = 0.0
     Cy = 0.0
-    for i in range(len(vertices)):
+    n = len(vertices)
+    for i in range(n):
         x_i = vertices[i, 0]
         y_i = vertices[i, 1]
-        x_ip1 = vertices[(i + 1) % len(vertices), 0]
-        y_ip1 = vertices[(i + 1) % len(vertices), 1]
+        x_ip1 = vertices[(i + 1) % n, 0]
+        y_ip1 = vertices[(i + 1) % n, 1]
         cross_term = (x_i * y_ip1 - x_ip1 * y_i)
         signed_area += cross_term
         Cx += (x_i + x_ip1) * cross_term
         Cy += (y_i + y_ip1) * cross_term
 
     if abs(signed_area) < 1e-12:
-        return np.mean(vertices, axis=0) # Fallback for zero area
+        # For zero area, return geometric mean as fallback (might be line or point)
+        return np.mean(vertices, axis=0)
 
     signed_area *= 0.5
+    # Avoid division by zero if signed_area is somehow still zero after check
+    if abs(signed_area) < 1e-12:
+        return np.mean(vertices, axis=0)
+
     Cx /= (6.0 * signed_area)
     Cy /= (6.0 * signed_area)
 
@@ -110,7 +106,14 @@ def polygon_centroid(vertices):
 
 def wrap_point(point, width, height):
     """Wraps a point coordinates to stay within the [0, width) x [0, height) domain."""
+    point = np.asarray(point)
+    # Use fmod for floating point modulo which handles negatives correctly for wrapping
+    # x = np.fmod(point[0], width)
+    # y = np.fmod(point[1], height)
+    # return np.array([x + width if x < 0 else x, y + height if y < 0 else y])
+    # Simpler: standard modulo works correctly for positive width/height
     return np.array([point[0] % width, point[1] % height])
+
 
 def generate_ghost_points(points, width, height):
     """
@@ -123,11 +126,12 @@ def generate_ghost_points(points, width, height):
 
     Returns:
         np.ndarray: Array of shape (9N, 2) containing original and ghost points.
-        np.ndarray: Array of shape (N,) mapping original point index for each row in output.
-                    (Useful for associating Voronoi regions back to original points)
+        np.ndarray: Array of shape (9N,) mapping original point index for each row in output.
     """
+    points = np.asarray(points)
     N = points.shape[0]
-    all_points = np.zeros(((3 * 3 * N), 2))
+    # Pre-allocate array
+    all_points = np.zeros(((9 * N), 2))
     original_indices = np.zeros(9 * N, dtype=int)
 
     idx = 0
@@ -144,7 +148,7 @@ def generate_ghost_points(points, width, height):
 def clip_polygon_to_boundary(polygon_vertices, width, height):
     """
     Clips a polygon (defined by vertices) to the rectangular boundary [0, W] x [0, H].
-    Requires Shapely.
+    Requires Shapely. Returns empty list for invalid input polygons.
 
     Args:
         polygon_vertices (list or np.ndarray): List of (x, y) vertex coordinates.
@@ -153,70 +157,58 @@ def clip_polygon_to_boundary(polygon_vertices, width, height):
 
     Returns:
         list: A list of numpy arrays, where each array contains the vertices
-              of a clipped polygon piece. Returns an empty list if the polygon
-              is outside the boundary or clipping fails. Returns a list with
-              one element if the polygon is fully contained or clipped cleanly.
-              Can return multiple polygons if the original polygon crosses the
-              boundary multiple times in a complex way after Voronoi generation.
+              of a clipped polygon piece.
     """
-    if polygon_vertices is None or len(polygon_vertices) < 3:
+    if not SHAPELY_AVAILABLE:
+        # print("Warning: Shapely not available, cannot perform polygon clipping.")
+        # Return unclipped vertices? Or empty? Empty is safer.
+        return []
+
+    # Check for None or insufficient vertices explicitly
+    if polygon_vertices is None:
+        return []
+    # Ensure numpy array and check shape
+    polygon_vertices = np.asarray(polygon_vertices)
+    if polygon_vertices.ndim != 2 or polygon_vertices.shape[1] != 2 or polygon_vertices.shape[0] < 3:
         return []
 
     try:
         # Define the clipping boundary
-        boundary = box(0, 0, width, height)
+        boundary = box(0, 0, width, height, ccw=True) # Ensure CCW boundary
 
-        # Create a Shapely polygon
-        # Add closing vertex if not present (shapely doesn't strictly require it)
-        if not np.allclose(polygon_vertices[0], polygon_vertices[-1]):
-             poly_verts_closed = list(polygon_vertices) + [polygon_vertices[0]]
-        else:
-             poly_verts_closed = list(polygon_vertices)
+        # Create a Shapely polygon from vertices
+        poly_verts_list = [tuple(p) for p in polygon_vertices]
+        polygon = Polygon(poly_verts_list)
 
-        # Check for sufficient vertices and validity before creating polygon
-        if len(poly_verts_closed) < 4: # Need at least 3 unique points for a polygon (4 verts closed)
-             # print("Warning: Not enough vertices for Shapely polygon.")
-             return []
-
-        # Attempt to create the Shapely polygon
-        polygon = Polygon(poly_verts_closed)
-
-        # Check if the polygon is valid (e.g., not self-intersecting in problematic ways)
+        # FIX: Check validity *before* buffering or intersection.
         if not polygon.is_valid:
-            # Try to buffer slightly to fix minor validity issues
-            polygon = polygon.buffer(0)
-            if not polygon.is_valid:
-                # print(f"Warning: Invalid polygon geometry encountered, cannot clip. Vertices: {polygon_vertices}")
-                return [] # Cannot proceed with invalid geometry
+            # Optionally try buffering to fix minor issues? Risky for complex invalidity.
+            # polygon = polygon.buffer(0)
+            # if not polygon.is_valid:
+            #     # print(f"Warning: Invalid polygon geometry, cannot clip. Vertices (first 5): {polygon_vertices[:5]}")
+            return [] # Return empty list for invalid input geometry
 
+        # Perform the intersection (use buffer(0) on boundary too for robustness?)
+        clipped_geom = polygon.intersection(boundary.buffer(0))
 
-        # Perform the intersection
-        clipped_geom = polygon.intersection(boundary)
-
-        # Process the result (can be Polygon, MultiPolygon, or empty)
+        # Process the result
         output_polygons = []
         if clipped_geom.is_empty:
-            return []
+            pass # Return []
         elif isinstance(clipped_geom, Polygon):
-            # Extract vertices, ensuring correct format (list of points)
-            verts = np.array(clipped_geom.exterior.coords)
-            output_polygons.append(verts[:-1]) # Exclude duplicate closing vertex
+            if clipped_geom.is_valid and not clipped_geom.is_empty and clipped_geom.area > 1e-12: # Check area
+                 verts = np.array(clipped_geom.exterior.coords)
+                 if len(verts) > 1 and np.allclose(verts[0], verts[-1]): verts = verts[:-1]
+                 if len(verts) >= 3: output_polygons.append(verts)
         elif isinstance(clipped_geom, (MultiPolygon, GeometryCollection)):
-            # Handle multiple disjoint pieces resulting from clipping
             for geom in clipped_geom.geoms:
-                 if isinstance(geom, Polygon) and not geom.is_empty:
+                 if isinstance(geom, Polygon) and geom.is_valid and not geom.is_empty and geom.area > 1e-12: # Check area
                      verts = np.array(geom.exterior.coords)
-                     output_polygons.append(verts[:-1]) # Exclude duplicate closing vertex
-        elif isinstance(clipped_geom, (LineString, Point)):
-             # Intersection resulted in lower dimension object (e.g., only touches boundary)
-             # print("Warning: Polygon intersection resulted in LineString or Point.")
-             return []
-        else:
-            # print(f"Warning: Unexpected geometry type after clipping: {type(clipped_geom)}")
-            return []
+                     if len(verts) > 1 and np.allclose(verts[0], verts[-1]): verts = verts[:-1]
+                     if len(verts) >= 3: output_polygons.append(verts)
 
         return output_polygons
 
-    except Exception as e:
-        # print(f"Error during polygon clipping: {e}. Polygon vertices: {polygon_vertices}")
-        return [] # Return empty list on error
+    except (GEOSException, Exception) as e:
+        # print(f"Error during polygon clipping (Shapely/GEOS): {e}. Polygon vertices (first 5): {polygon_vertices[:5]}")
+        return []
