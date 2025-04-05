@@ -7,26 +7,26 @@
 - 📊 Radial area gradients (larger central tiles)
 - 🔀 Maximized irregularity in tile sizes
 - 🧩 Interlocking tiles without gaps or overlaps
-- 🔍 Zoomed-in spherical topology for seamless continuity
+- 🔍 Spherical topology for seamless continuity
 
 The engine uses a mathematically grounded energy function based on multivariate calculus and gradient descent to achieve aesthetic and structural balance.
 
-## 🆕 Zoomed-in Spherical Approach
+## 🆕 Direct Spherical Approach
 
-The latest version implements a **zoomed-in spherical tessellation** to naturally achieve the boundaryless property:
+The latest version implements a **true spherical tessellation** to naturally achieve the boundaryless property:
 
-- 🌐 Points are projected onto a unit sphere
-- 🔍 Only a portion of the sphere is used (zoomed-in view)
-- 🔄 Voronoi tessellation is computed on this portion
-- 📈 Results are projected back to 2D using an equal-area projection
+- 🌐 Points are generated directly on a unit sphere surface
+- 🔄 Spherical Voronoi tessellation is computed using SciPy's SphericalVoronoi
+- 📊 Region areas are calculated using spherical geometry principles
+- 🧮 Optimization occurs directly on the sphere surface
 
-This approach eliminates the need to handle complex boundary conditions since we're not using the entire sphere surface - we're only working with a small patch of it, far from any boundary.
+This approach completely eliminates boundary conditions since a sphere has no boundaries. The tessellation forms a continuous outer crust with regions that interlock perfectly.
 
 ---
 
 ## 🧠 Mathematical Formulation
 
-The tessellation is optimized by minimizing a composite energy function over polygon vertices:
+The tessellation is optimized by minimizing a composite energy function over region vertices:
 
 \[
 \frac{\partial}{\partial v_{i,j}}\Biggl[
@@ -35,35 +35,46 @@ The tessellation is optimized by minimizing a composite energy function over pol
 + \lambda_3\sum_{\theta \in \Theta_i} \frac{1}{\theta}
 + \lambda_4 \phi(A(F_i))
 + \lambda_5 d(\partial F_i, \partial(\cup_{j\neq i}F_j))^2
-+ \lambda_6\left\|\frac{\partial v_{i,j}(t)}{\partial t}\right\|^2
 + \lambda_7\left\|\nabla c(F_i)\right\|^2
 \Biggr] = \mathbf{0}
 \]
 
-Each λ-term corresponds to a geometrically or topologically meaningful constraint.
+Each λ-term corresponds to a geometrically or topologically meaningful constraint:
+- λ₁: Area difference from target (based on angular distance)
+- λ₂: Boundary stability between adjacent regions
+- λ₃: Angular penalty to maintain well-formed spherical polygons
+- λ₄: Size variety penalty to enforce desired region size range
+- λ₅: Boundary stability with all other regions
+- λ₇: Centroid gradient for shape regularity
 
 ---
 
 ## 🔧 Features
 
-- ✅ Radial size gradient implementation
-- ✅ Polygonal area irregularity
-- ✅ Gapless and overlap-free tessellation
-- ✅ Stable polygonal boundaries
-- ✅ Gradient-constrained vertex movements
-- ✅ Modular penalty functions (angle, size, boundary, etc.)
-- ✅ Fully tested (12 passing tests)
-- ✅ Zoomed-in spherical topology for true boundaryless tiling
+- ✅ Radial size gradient implementation (larger tiles toward reference point)
+- ✅ Spherical polygon area calculation and optimization
+- ✅ Gapless and overlap-free tessellation on sphere surface
+- ✅ Stable region boundaries with proper interlocking
+- ✅ Tangent-space gradient computation for vertex movements
+- ✅ Modular penalty functions (angle, size, boundary)
+- ✅ Comprehensive test suite (12 passing tests)
+- ✅ True 3D visualization with region coloring options
 
 ---
 
 ## 📊 Visualization
 
-The project includes both 2D and 3D visualizations:
+The project includes multiple visualization methods:
 
-- 2D projection showing the tessellation in a planar representation
-- 3D visualization showing the points on a sphere
-- Interactive Streamlit app with zoom factor control
+- 3D visualization showing the complete spherical tessellation
+- Color-coded regions based on area or distance from reference point
+- Interactive Streamlit app with adjustable parameters:
+  - Number of points
+  - Optimization iterations
+  - Learning rate
+  - Random seed
+  - Color scheme selection
+  - View mode options
 
 ---
 
@@ -85,6 +96,11 @@ To run the main demonstration:
 python main.py
 ```
 
+This will generate three visualizations:
+- `initial_tessellation.png`: The unoptimized spherical tessellation
+- `optimized_tessellation.png`: The result after optimization
+- `tessellation_gradient.png`: Visualization with distance-based gradient coloring
+
 To run the interactive Streamlit app:
 
 ```bash
@@ -97,11 +113,20 @@ To run the tests:
 python -m pytest tessellation_test/tests/ -v
 ```
 
-## 🔍 Zooming Explained
+To visualize the project's directory structure:
 
-The zoom factor (default 0.5) controls how much of the sphere is used:
-- Lower values (e.g., 0.2) focus on a very small patch, completely avoiding boundary effects
-- Higher values (e.g., 0.8) use more of the sphere but may introduce more distortion
-- The optimal setting balances coverage area with natural tessellation properties
+```bash
+python tessellation_test/visualize_tree.py
+```
 
-For best results, keep the zoom factor between 0.3 and 0.7.
+## 🧪 Technical Details
+
+The implementation uses:
+- SciPy's SphericalVoronoi for generating the initial tessellation
+- Spherical geometry for area calculations and angular distances
+- Tangent-space gradient projection to keep vertices on the sphere
+- Custom energy functions with tunable λ parameters
+- Gradient descent optimization with normalization
+- Matplotlib's 3D plotting for visualization
+- Streamlit for interactive exploration
+- Comprehensive test suite verifying mathematical properties

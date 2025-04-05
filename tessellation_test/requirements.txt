@@ -1,0 +1,8 @@
+numpy
+streamlit
+scipy>=1.10.0
+matplotlib
+networkx
+pydot
+shapely>=1.8.0  # Explicitly require shapely
+pytest

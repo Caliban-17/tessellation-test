@@ -1,9 +1,12 @@
 numpy
-streamlit
 scipy>=1.10.0  # Ensure you have a version with SphericalVoronoi
+
+# Visualization & UI
 matplotlib
-networkx
-pydot
-shapely
+streamlit
+networkx # For visualize_tree.py utility
+pydot     # For visualize_tree.py utility (requires Graphviz system install)
+
+#testing
+
 pytest
-shapely

@@ -1,442 +1,374 @@
 import numpy as np
-from scipy.spatial import SphericalVoronoi
-from scipy.spatial.distance import cdist
-from shapely.geometry import Polygon
-import warnings
+from scipy.spatial import Voronoi as ScipyVoronoi # Rename to avoid conflict
+from utils.geometry import (
+    toroidal_distance_sq, polygon_area, polygon_centroid, wrap_point,
+    generate_ghost_points, clip_polygon_to_boundary
+)
 
-# Parameters (fine-tune as needed)
-λ1, λ2, λ3, λ4, λ5, λ7 = 1, 1, 1, 1, 1, 1
-A0, alpha = 0.03, 10       # Radial size gradient (larger center tiles)
-A_min, A_max = 0.005, 0.1  # Encourage variety in tile sizes explicitly
+# Note: Voronoi calculation and clipping require Shapely library
 
-# Attributes for testing flags
-radial_size_gradient_implemented = True
-tile_size_irregularity_maximised = True
-no_tile_overlap = True
-no_tile_gaps = True
-stable_boundaries_achieved = True
-tiles_interlocking_correctly = True
-area_penalties_correctly_applied = True
-boundary_penalties_correctly_applied = True
-target_area_correctly_computed = True
-vertices_movement_constrained = True
-energy_function_properly_defined = True
-gradients_explicitly_computed = True
-
-def generate_spherical_points(num_points, random_seed=42):
+def generate_voronoi_regions_toroidal(points, width, height):
     """
-    Generate points uniformly distributed on a unit sphere.
-    
-    Parameters:
-        num_points: Number of points to generate
-        random_seed: Random seed for reproducibility
-        
+    Generates Voronoi regions for points on a 2D torus [0, W] x [0, H].
+
+    Args:
+        points (np.ndarray): Array of shape (N, 2) of generator points in [0, W]x[0, H].
+        width (float): Width of the torus domain.
+        height (float): Height of the torus domain.
+
     Returns:
-        Array of 3D points on the unit sphere
+        list: A list of lists of numpy arrays. Each inner list corresponds to an
+              original point. Each numpy array within the inner list contains the
+              vertices (N, 2) of a polygon piece making up the Voronoi region
+              clipped to the boundary [0, width] x [0, height].
+              Returns None if Voronoi calculation fails.
     """
-    np.random.seed(random_seed)
-    
-    # Generate random points in 3D
-    points = np.random.randn(num_points, 3)
-    
-    # Normalize to unit sphere
-    radii = np.sqrt(np.sum(points**2, axis=1))
-    points = points / radii[:, np.newaxis]
-    
-    return points
+    if points is None or len(points) < 1:
+        print("Error: No points provided for Voronoi generation.")
+        return None
+    if width <= 0 or height <= 0:
+        print("Error: Width and height must be positive.")
+        return None
 
-def generate_voronoi(num_points=50, random_seed=42):
-    """
-    Generate a spherical Voronoi diagram.
-    
-    Parameters:
-        num_points: Number of generator points
-        random_seed: Random seed for reproducibility
-        
-    Returns:
-        SphericalVoronoi object
-    """
-    # Generate points on the unit sphere
-    points = generate_spherical_points(num_points, random_seed)
-    
-    # Generate spherical Voronoi diagram
+    N_original = points.shape[0]
+
+    # Ensure points are within the primary domain (optional, depends on caller)
+    # points[:, 0] = np.mod(points[:, 0], width)
+    # points[:, 1] = np.mod(points[:, 1], height)
+
     try:
-        sv = SphericalVoronoi(points, radius=1.0)
-        sv.sort_vertices_of_regions()
-        return sv
+        # 1. Generate ghost points for toroidal wrapping
+        all_points, original_indices = generate_ghost_points(points, width, height)
+
+        # 2. Compute standard Voronoi diagram on the 3x3 grid of points
+        # Add buffer points far away if needed by qhull to prevent errors with few points
+        # buffer_dist = max(width, height) * 2
+        # buffer_points = np.array([
+        #     [-buffer_dist, -buffer_dist], [buffer_dist, -buffer_dist],
+        #     [-buffer_dist, buffer_dist], [buffer_dist, buffer_dist]
+        # ]) * 5 # Even further
+        # combined_points_for_voronoi = np.vstack((all_points, buffer_points))
+
+        vor = ScipyVoronoi(all_points) # Use all_points directly
+
     except Exception as e:
-        warnings.warn(f"Error generating spherical Voronoi: {e}")
-        # Generate backup points if there's an issue
-        points = np.random.randn(num_points + 10, 3)
-        points = points / np.sqrt(np.sum(points**2, axis=1))[:, np.newaxis]
-        sv = SphericalVoronoi(points, radius=1.0)
-        sv.sort_vertices_of_regions()
-        return sv
+        print(f"Error during Scipy Voronoi calculation: {e}")
+        # Common issue: QhullError if points are degenerate (collinear, coincident)
+        # Check for duplicate points:
+        unique_points, counts = np.unique(points, axis=0, return_counts=True)
+        if len(unique_points) < len(points):
+             print(f"Warning: Duplicate points detected ({len(points) - len(unique_points)} duplicates). Voronoi may fail or be ill-defined.")
+        # Check for collinear points? Harder.
+        return None # Indicate failure
 
-def get_region_centroids(vor):
-    """
-    Calculate the centroids of Voronoi regions on the sphere.
-    
-    Parameters:
-        vor: SphericalVoronoi object
-        
-    Returns:
-        Array of centroids (normalized to lie on the sphere)
-    """
-    centroids = []
-    
-    for region in vor.regions:
-        if not region:
+    # 3. Process regions and clip them to the boundary [0, W] x [0, H]
+    clipped_regions_all_points = [[] for _ in range(len(all_points))] # Store potentially multi-piece regions
+
+    # Map regions from Voronoi object back to the generating points
+    point_to_region_map = vor.point_region # Index is point index, value is region index
+
+    for point_idx, region_idx in enumerate(point_to_region_map):
+        if region_idx == -1: # Point is outside the Voronoi diagram (shouldn't happen for valid input?)
             continue
-        
-        # Get region vertices
-        verts = vor.vertices[region]
-        
-        # Simple centroid calculation (will be inside the sphere)
-        centroid = np.mean(verts, axis=0)
-        
-        # Project back to sphere surface
-        centroid = centroid / np.linalg.norm(centroid)
-        
-        centroids.append(centroid)
-    
-    return np.array(centroids)
 
-def spherical_distance(p1, p2):
-    """
-    Calculate the great-circle distance between two points on a unit sphere.
-    
-    Parameters:
-        p1, p2: 3D points on the unit sphere
-        
-    Returns:
-        Great-circle distance
-    """
-    # Normalize points to ensure they're on the unit sphere
-    p1 = p1 / np.linalg.norm(p1)
-    p2 = p2 / np.linalg.norm(p2)
-    
-    # Dot product, clamped to [-1, 1] to avoid numerical issues
-    dot_product = np.clip(np.dot(p1, p2), -1.0, 1.0)
-    
-    # Great-circle distance
-    return np.arccos(dot_product)
+        region_vertex_indices = vor.regions[region_idx]
 
-def spherical_polygon_area(vertices):
-    """
-    Calculate the area of a spherical polygon on a unit sphere.
-    Uses the spherical excess formula.
-    
-    Parameters:
-        vertices: Array of 3D points on the unit sphere
-        
-    Returns:
-        Area of the spherical polygon
-    """
-    if len(vertices) < 3:
-        return 0.0
-    
-    # Compute the sum of interior angles
-    n = len(vertices)
-    angle_sum = 0.0
-    
-    for i in range(n):
-        a = vertices[i]
-        b = vertices[(i + 1) % n]
-        c = vertices[(i + 2) % n]
-        
-        # Normalize vectors to ensure they're on the unit sphere
-        a = a / np.linalg.norm(a)
-        b = b / np.linalg.norm(b)
-        c = c / np.linalg.norm(c)
-        
-        # Compute the angle between ab and bc using the spherical law of cosines
-        ab = np.cross(a, b)
-        bc = np.cross(b, c)
-        
-        # Normalize cross products
-        ab_norm = np.linalg.norm(ab)
-        bc_norm = np.linalg.norm(bc)
-        
-        if ab_norm < 1e-10 or bc_norm < 1e-10:
-            continue
-            
-        ab = ab / ab_norm
-        bc = bc / bc_norm
-        
-        # Calculate angle between great circles
-        cos_angle = np.clip(np.dot(ab, bc), -1.0, 1.0)
-        angle = np.arccos(cos_angle)
-        
-        angle_sum += angle
-    
-    # Spherical excess formula: area = (sum of angles) - (n-2)*pi
-    excess = angle_sum - (n - 2) * np.pi
-    
-    # Area of a spherical polygon on a unit sphere
-    return excess
+        if not region_vertex_indices or -1 in region_vertex_indices:
+             # Region is infinite (extends to boundary of Voronoi diagram bounds)
+             # Clipping should handle this, but we need finite vertices.
+             # Reconstruct using ridges? Complex.
+             # Easier: Clip the polygon defined by finite vertices. SciPy usually gives finite vertices.
+             finite_vertex_indices = [idx for idx in region_vertex_indices if idx != -1]
+             if len(finite_vertex_indices) < 3:
+                 continue # Not enough vertices for a polygon
+             polygon_vertices = vor.vertices[finite_vertex_indices]
 
-def target_area(r, A0=A0, alpha=alpha):
-    """
-    Calculate the target area for a polygon based on distance from center.
-    
-    Parameters:
-        r: Angular distance from center on sphere
-        A0: Base area
-        alpha: Radial gradient factor
-        
-    Returns:
-        Target area
-    """
-    return A0 / (1 + alpha * r**2)
+        else:
+            # Region is finite
+            polygon_vertices = vor.vertices[region_vertex_indices]
 
-def size_variety_penalty(area, A_min=A_min, A_max=A_max):
-    """
-    Calculate penalty for polygon size outside desired range.
-    
-    Parameters:
-        area: Polygon area
-        A_min: Minimum desired area
-        A_max: Maximum desired area
-        
-    Returns:
-        Size variety penalty
-    """
-    if A_min <= area <= A_max:
-        return 0  # No penalty if within the desired range
-    return min((area - A_min)**2, (area - A_max)**2)
+        if len(polygon_vertices) < 3:
+            continue # Skip degenerate regions
 
-def angle_penalty(vertices):
-    """
-    Calculate a penalty based on the angles in a spherical polygon.
-    
-    Parameters:
-        vertices: Array of 3D points on the unit sphere
-        
-    Returns:
-        Angle penalty value
-    """
-    if len(vertices) < 3:
-        return 0.0
-        
-    n = len(vertices)
-    angles = []
-    
-    for i in range(n):
-        a = vertices[(i - 1) % n]
-        b = vertices[i]
-        c = vertices[(i + 1) % n]
-        
-        # Normalize to ensure points are on unit sphere
-        a = a / np.linalg.norm(a)
-        b = b / np.linalg.norm(b)
-        c = c / np.linalg.norm(c)
-        
-        # Calculate tangent vectors at b
-        ab = a - b
-        ab = ab - np.dot(ab, b) * b  # Project to tangent plane
-        ab_norm = np.linalg.norm(ab)
-        
-        cb = c - b
-        cb = cb - np.dot(cb, b) * b  # Project to tangent plane
-        cb_norm = np.linalg.norm(cb)
-        
-        if ab_norm < 1e-10 or cb_norm < 1e-10:
-            continue
-            
-        # Normalize tangent vectors
-        ab = ab / ab_norm
-        cb = cb / cb_norm
-        
-        # Calculate angle between tangent vectors
-        cos_angle = np.clip(np.dot(ab, cb), -1.0, 1.0)
-        angle = np.arccos(cos_angle)
-        angles.append(angle)
-    
-    if not angles:
-        return 0.0
-        
-    # Avoid division by zero
-    angles = np.array(angles)
-    angles = np.maximum(angles, 1e-6)
-    return np.sum(1 / angles)
+        # Clip this polygon to the boundary [0, W] x [0, H]
+        clipped_pieces = clip_polygon_to_boundary(polygon_vertices, width, height)
 
-def boundary_stability(vertices, other_vertices_lists):
-    """
-    Calculate boundary stability between regions on the sphere.
-    
-    Parameters:
-        vertices: Vertices of the region to check
-        other_vertices_lists: List of vertices of other regions
-        
-    Returns:
-        Boundary stability measure
-    """
-    if not other_vertices_lists:
-        return 0.0
-        
-    min_distances = []
-    for other_vertices in other_vertices_lists:
-        if np.array_equal(vertices, other_vertices):
-            continue
-            
-        # Calculate minimum distance between vertices
-        dist_matrix = cdist(vertices, other_vertices)
-        min_distances.append(np.min(dist_matrix))
-    
-    if not min_distances:
-        return 0.0
-        
-    return min(min_distances) ** 2
+        # Store the clipped pieces associated with this point index (from all_points)
+        clipped_regions_all_points[point_idx] = clipped_pieces
 
-def compute_total_gradient(vertices, all_vertices_lists, sphere_center=(0, 0, 0)):
-    """
-    Compute the total gradient for vertices of a spherical region.
-    
-    Parameters:
-        vertices: Array of 3D points on the unit sphere
-        all_vertices_lists: List of vertices for all regions
-        sphere_center: Center of the sphere
-        
-    Returns:
-        Total gradient for vertices
-    """
-    if len(vertices) < 3:
-        return np.zeros_like(vertices)
-        
-    # Calculate centroid
-    centroid = np.mean(vertices, axis=0)
-    centroid_norm = np.linalg.norm(centroid)
-    if centroid_norm > 0:
-        centroid = centroid / centroid_norm  # Project to sphere
-        
-    # Calculate angular distance from a reference point (e.g., north pole)
-    reference_point = np.array([0, 0, 1.0])
-    r = spherical_distance(centroid, reference_point)
-        
-    # Calculate actual and target areas
-    area = spherical_polygon_area(vertices)
-    area_target = target_area(r)
-    area_diff = area - area_target
-    
-    # Initialize gradient
-    grad = np.zeros_like(vertices)
-    
-    # Area gradient: moves vertices toward or away from centroid gently
-    for i, vertex in enumerate(vertices):
-        # Vector from centroid to vertex (in tangent space)
-        direction = vertex - centroid
-        direction = direction - np.dot(direction, centroid) * centroid  # Project to tangent plane
-        
-        dir_norm = np.linalg.norm(direction)
-        if dir_norm > 0:
-            direction = direction / dir_norm
-            grad[i] += λ1 * area_diff * direction * 0.01
-    
-    # Angle penalty
-    angle_pen = angle_penalty(vertices)
-    for i, vertex in enumerate(vertices):
-        # Direction toward centroid in tangent space
-        direction = centroid - vertex
-        direction = direction - np.dot(direction, vertex) * vertex  # Project to tangent plane
-        
-        dir_norm = np.linalg.norm(direction)
-        if dir_norm > 0:
-            direction = direction / dir_norm
-            grad[i] += λ3 * angle_pen * direction * 0.005
-    
-    # Area variety penalty
-    variety_pen = size_variety_penalty(area)
-    for i, vertex in enumerate(vertices):
-        # Direction toward centroid in tangent space
-        direction = centroid - vertex
-        direction = direction - np.dot(direction, vertex) * vertex  # Project to tangent plane
-        
-        dir_norm = np.linalg.norm(direction)
-        if dir_norm > 0:
-            direction = direction / dir_norm
-            grad[i] += λ4 * variety_pen * direction * 0.005
-    
-    # Boundary stability with other regions
-    other_vertices = [v for v in all_vertices_lists if not np.array_equal(v, vertices)]
-    boundary_pen = boundary_stability(vertices, other_vertices)
-    for i, vertex in enumerate(vertices):
-        # Find closest vertices from other regions
-        min_dist = float('inf')
-        closest_direction = None
-        
-        for other_verts in other_vertices:
-            for other_vert in other_verts:
-                dist = np.linalg.norm(vertex - other_vert)
-                if dist < min_dist:
-                    min_dist = dist
-                    closest_direction = other_vert - vertex
-        
-        if closest_direction is not None:
-            closest_direction = closest_direction - np.dot(closest_direction, vertex) * vertex  # Project to tangent plane
-            dir_norm = np.linalg.norm(closest_direction)
-            if dir_norm > 0:
-                closest_direction = closest_direction / dir_norm
-                grad[i] += λ5 * boundary_pen * closest_direction * 0.01
-    
-    # Ensure vertices stay on the sphere by projecting gradient to tangent plane
-    for i, vertex in enumerate(vertices):
-        grad[i] = grad[i] - np.dot(grad[i], vertex) * vertex
-        
-    # Normalize gradient to prevent extreme moves
-    for i in range(len(grad)):
-        grad_norm = np.linalg.norm(grad[i])
-        if grad_norm > 0:
-            grad[i] = grad[i] / grad_norm
-    
-    return grad
 
-def update_vertices(vertices, gradient, learning_rate=0.001):
-    """
-    Update vertices using gradient descent while keeping them on the sphere.
-    
-    Parameters:
-        vertices: Array of 3D points on the unit sphere
-        gradient: Computed gradient
-        learning_rate: Learning rate for gradient descent
-        
-    Returns:
-        Updated vertices
-    """
-    # Update vertices
-    updated_vertices = vertices - learning_rate * gradient
-    
-    # Project back to unit sphere
-    norms = np.linalg.norm(updated_vertices, axis=1, keepdims=True)
-    updated_vertices = updated_vertices / norms
-    
-    return updated_vertices
+    # 4. Consolidate clipped regions for the *original* points
+    # A region for an original point can be made of pieces from its 9 ghost copies.
+    final_regions = [[] for _ in range(N_original)]
+    for all_points_idx, original_idx in enumerate(original_indices):
+         # Add the clipped pieces associated with this ghost point instance
+         # to the list for the corresponding original point.
+         final_regions[original_idx].extend(clipped_regions_all_points[all_points_idx])
 
-def optimize_tessellation(vor, iterations=50, learning_rate=0.001):
+    # Optional: Merge contiguous polygon pieces for the same original point using shapely?
+    # For now, return list of pieces per original point. The visualization layer can draw them all.
+
+    # Sanity check: ensure output list has correct length
+    if len(final_regions) != N_original:
+         print(f"Warning: Mismatch in final region count ({len(final_regions)}) vs original points ({N_original}).")
+         # Fallback or error? Return None for safety.
+         return None
+
+    return final_regions
+
+
+def calculate_energy_2d(regions_data, points, width, height,
+                        lambda_area=1.0, lambda_centroid=0.1, lambda_angle=0.01,
+                        target_area_func=None):
     """
-    Optimize the spherical Voronoi tessellation.
-    
-    Parameters:
-        vor: SphericalVoronoi object
-        iterations: Number of optimization iterations
-        learning_rate: Learning rate for gradient descent
-        
+    Calculates the total energy of the 2D toroidal tessellation.
+
+    Args:
+        regions_data (list): Output from generate_voronoi_regions_toroidal.
+                             List (size N) of lists of polygon vertex arrays.
+        points (np.ndarray): The generator points (N, 2).
+        width, height (float): Domain dimensions.
+        lambda_area, lambda_centroid, lambda_angle: Weights.
+        target_area_func (callable, optional): func(point_xy) -> target_area.
+
     Returns:
-        Optimized vertices for each region
+        float: Total energy.
+        dict: Dictionary of energy components.
     """
-    # Extract regions and vertices
-    regions = []
-    for region in vor.regions:
-        if region:
-            regions.append(np.array(vor.vertices[region]))
-    
-    # Run optimization iterations
-    for _ in range(iterations):
-        updated_regions = []
-        for i, vertices in enumerate(regions):
-            grad = compute_total_gradient(vertices, regions)
-            updated_vertices = update_vertices(vertices, grad, learning_rate)
-            updated_regions.append(updated_vertices)
-        regions = updated_regions
-    
-    return regions
+    total_energy = 0.0
+    energy_components = {'area': 0.0, 'centroid': 0.0, 'angle': 0.0}
+    num_valid_regions = 0
+    num_generators = len(points)
+    target_total_area = width * height
+
+    if regions_data is None:
+         return np.inf, energy_components # Voronoi failed
+
+    for i, region_pieces in enumerate(regions_data):
+        if not region_pieces: continue # Skip if point has no associated region pieces after clipping
+
+        generator_point = points[i]
+        current_total_area = sum(polygon_area(piece) for piece in region_pieces)
+
+        if current_total_area < 1e-12: continue # Skip zero-area regions
+
+        num_valid_regions += 1
+
+        # --- Area Term ---
+        if target_area_func:
+            target_area = target_area_func(generator_point)
+            if target_area <= 0:
+                 target_area = target_total_area / num_generators # Fallback
+        else:
+            target_area = target_total_area / num_generators # Default uniform
+
+        area_diff_sq = (current_total_area - target_area)**2
+        energy_components['area'] += lambda_area * area_diff_sq
+
+        # --- Centroid Term ---
+        # Calculate overall centroid of potentially multiple pieces (weighted average)
+        overall_centroid_x, overall_centroid_y = 0.0, 0.0
+        total_weight = 0.0
+        valid_centroid_calc = True
+        for piece in region_pieces:
+             piece_area = polygon_area(piece)
+             piece_centroid = polygon_centroid(piece)
+             if piece_area > 1e-12 and piece_centroid is not None:
+                 overall_centroid_x += piece_centroid[0] * piece_area
+                 overall_centroid_y += piece_centroid[1] * piece_area
+                 total_weight += piece_area
+             else:
+                 # Handle degenerate pieces if necessary
+                 pass
+
+        if total_weight > 1e-12:
+            region_centroid = np.array([overall_centroid_x / total_weight, overall_centroid_y / total_weight])
+            # Use TOROIDAL distance squared for energy penalty
+            centroid_dist_sq = toroidal_distance_sq(generator_point, region_centroid, width, height)
+            energy_components['centroid'] += lambda_centroid * centroid_dist_sq
+        else:
+            # Cannot calculate valid centroid if total area of pieces is zero
+            energy_components['centroid'] += 0 # Or assign a penalty?
+
+        # --- Angle Term (Simpler 2D version) ---
+        angle_penalty = 0
+        small_angle_threshold_rad = np.deg2rad(20) # Penalize angles < 20 degrees
+        for piece in region_pieces:
+             verts = piece
+             n_verts = len(verts)
+             if n_verts < 3: continue
+             for j in range(n_verts):
+                 p_prev = verts[j-1]
+                 p_curr = verts[j]
+                 p_next = verts[(j+1) % n_verts]
+                 # Vectors along edges meeting at p_curr
+                 v1 = p_prev - p_curr
+                 v2 = p_next - p_curr
+                 norm1 = np.linalg.norm(v1)
+                 norm2 = np.linalg.norm(v2)
+                 if norm1 > 1e-12 and norm2 > 1e-12:
+                     cos_theta = np.dot(v1, v2) / (norm1 * norm2)
+                     cos_theta = np.clip(cos_theta, -1.0, 1.0)
+                     angle = np.arccos(cos_theta)
+                     if 0 < angle < small_angle_threshold_rad:
+                         angle_penalty += (small_angle_threshold_rad - angle)**2
+                 # else: Handle collinear/coincident points - angle is 0 or pi, likely not penalized
+
+
+        energy_components['angle'] += lambda_angle * angle_penalty
+
+
+    total_energy = sum(energy_components.values())
+    # Optional normalization by num_valid_regions here
+
+    return total_energy, energy_components
+
+
+def calculate_gradient_2d(points, width, height,
+                          lambda_area=1.0, lambda_centroid=0.1, lambda_angle=0.01,
+                          target_area_func=None, delta=1e-6):
+    """
+    Calculates the gradient of the 2D energy function using finite differences.
+
+    Args:
+        points (np.ndarray): Current generator points (N, 2).
+        width, height (float): Domain dimensions.
+        lambda_area, lambda_centroid, lambda_angle: Weights.
+        target_area_func (callable, optional): Target area function.
+        delta (float): Step size for finite differences.
+
+    Returns:
+        np.ndarray: Gradient vector of shape (N, 2). Returns zeros if fails.
+    """
+    n_points = points.shape[0]
+    gradient = np.zeros_like(points, dtype=float)
+
+    # Calculate base energy
+    regions_base = generate_voronoi_regions_toroidal(points, width, height)
+    if regions_base is None:
+        print("Warning: Base Voronoi failed in gradient calculation.")
+        return gradient # Zero gradient
+
+    energy_base, _ = calculate_energy_2d(regions_base, points, width, height,
+                                         lambda_area, lambda_centroid, lambda_angle,
+                                         target_area_func)
+
+    if not np.isfinite(energy_base):
+        print(f"Warning: Base energy non-finite ({energy_base}). Zero gradient.")
+        return gradient
+
+    for i in range(n_points):
+        for j in range(2): # Iterate x and y dimensions
+            points_perturbed = points.copy()
+            points_perturbed[i, j] += delta
+            # Wrap perturbed point back into domain? Optional, toroidal distance handles it.
+            # points_perturbed[i] = wrap_point(points_perturbed[i], width, height)
+
+            # Calculate perturbed energy
+            regions_perturbed = generate_voronoi_regions_toroidal(points_perturbed, width, height)
+            if regions_perturbed is None:
+                 print(f"Warning: Perturbed Voronoi failed (Point {i}, Dim {j}). Grad comp=0.")
+                 gradient[i, j] = 0.0
+                 continue
+
+            energy_perturbed, _ = calculate_energy_2d(regions_perturbed, points_perturbed, width, height,
+                                                     lambda_area, lambda_centroid, lambda_angle,
+                                                     target_area_func)
+
+            if not np.isfinite(energy_perturbed):
+                 print(f"Warning: Perturbed energy non-finite (P {i}, D {j}). Grad comp=0.")
+                 gradient[i, j] = 0.0
+                 continue
+
+            # Forward difference
+            gradient[i, j] = (energy_perturbed - energy_base) / delta
+
+    return gradient
+
+
+def optimize_tessellation_2d(initial_points, width, height, iterations=50, learning_rate=0.1,
+                             lambda_area=1.0, lambda_centroid=0.1, lambda_angle=0.01,
+                             target_area_func=None, verbose=False):
+    """
+    Optimizes 2D toroidal tessellation using gradient descent.
+
+    Args:
+        initial_points (np.ndarray): Starting points (N, 2) in [0,W]x[0,H].
+        width, height (float): Domain dimensions.
+        iterations (int): Number of steps.
+        learning_rate (float): Step size.
+        lambda_area, lambda_centroid, lambda_angle: Weights.
+        target_area_func (callable, optional): Target area function.
+        verbose (bool): Print progress.
+
+    Returns:
+        tuple: (final_regions, final_points, history)
+            - final_regions (list): Result from generate_voronoi_regions_toroidal.
+            - final_points (np.ndarray): Optimized points (N, 2).
+            - history (list): Energy values over iterations.
+    """
+    points = initial_points.copy()
+    # Ensure points start within domain
+    points[:, 0] = np.mod(points[:, 0], width)
+    points[:, 1] = np.mod(points[:, 1], height)
+
+    history = []
+    last_successful_regions = None
+    points_before_fail = points.copy()
+
+    print(f"Starting 2D optimization: LR={learning_rate}, Iter={iterations}")
+    print(f"Lambdas: Area={lambda_area}, Centroid={lambda_centroid}, Angle={lambda_angle}")
+
+    for i in range(iterations):
+        # 1. Generate current regions (needed for energy calculation if logging)
+        regions_current = generate_voronoi_regions_toroidal(points, width, height)
+        if regions_current is None:
+            print(f"Iter {i+1}/{iterations}: Failed Voronoi gen. Stopping.")
+            return last_successful_regions, points_before_fail, history
+        last_successful_regions = regions_current
+        points_before_fail = points.copy()
+
+        # 2. Calculate energy (for history/logging)
+        current_energy, energy_components = calculate_energy_2d(
+            regions_current, points, width, height,
+            lambda_area, lambda_centroid, lambda_angle, target_area_func
+        )
+        history.append(current_energy)
+
+        if verbose:
+             comp_str = ", ".join([f"{k.capitalize()}: {v:.4f}" for k, v in energy_components.items()])
+             print(f"Iter {i+1}/{iterations}: Energy={current_energy:.4f} ({comp_str})")
+
+        if not np.isfinite(current_energy):
+             print(f"Iter {i+1}/{iterations}: Energy non-finite. Stopping.")
+             return last_successful_regions, points_before_fail, history
+
+        # 3. Calculate gradient
+        grad = calculate_gradient_2d(
+            points, width, height, lambda_area, lambda_centroid, lambda_angle,
+            target_area_func, delta=1e-6
+        )
+
+        grad_norm = np.linalg.norm(grad)
+        if not np.isfinite(grad_norm):
+             print(f"Iter {i+1}/{iterations}: Gradient non-finite. Stopping.")
+             return last_successful_regions, points_before_fail, history
+        if grad_norm < 1e-8:
+             print(f"Iter {i+1}/{iterations}: Gradient norm near zero ({grad_norm:.2e}). Converged/Stuck.")
+             break
+
+        # 4. Update points
+        points = points - learning_rate * grad
+
+        # 5. Wrap points back into the fundamental domain [0, W] x [0, H]
+        points[:, 0] = np.mod(points[:, 0], width)
+        points[:, 1] = np.mod(points[:, 1], height)
+
+    # Final regions calculation
+    final_regions = generate_voronoi_regions_toroidal(points, width, height)
+    if final_regions is None:
+        print("Warning: Failed to generate final regions after optimization.")
+        final_regions = last_successful_regions # Return last good one
+
+    print(f"Optimization finished after {i+1} iterations.")
+    return final_regions, points, history
